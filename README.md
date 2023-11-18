@@ -1,5 +1,5 @@
 # campus-job-finder
-This program sends you weekly emails about the UMass campus job postings from the [Job Portal](https://yes.umass.edu/portal/jobsearch).
+This program sends you weekly emails about the campus job postings from the [Job Portal](https://yes.umass.edu/portal/jobsearch) and [Handshake](https://joinhandshake.com/).
 
 ## Usage
 1. Set up Virtual Environment
