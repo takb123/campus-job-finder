@@ -1,5 +1,5 @@
 # campus-job-finder
-This program sends you weekly emails about the UMass campus job postings from the [Job Portal](https://yes.umass.edu/portal/jobsearch).
+This program sends you weekly emails about the campus job postings from the [Job Portal](https://yes.umass.edu/portal/jobsearch) and [Handshake](https://joinhandshake.com/).
 
 ## Usage
 1. Set up Virtual Environment
@@ -7,7 +7,7 @@ This program sends you weekly emails about the UMass campus job postings from th
 ```console
 
 # Create a Virtual Environment
-$ python -m virtualenv venv_name
+$ python -m venv venv_name
 
 # Activate the Virtual Environment
 $ source venv_name/bin/activate
@@ -26,13 +26,23 @@ SENDER_EMAIL=xxxxx@gmail.com
 RECEIVER_EMAIL=xxxxx@example.com
 ```
 
-4. Set up a cron job to run `jobsearch.py` every week
+4. Enter Cookie Information in `jobsearch.py` in the `fetchHandshakeData` method
+( I do not know if there are better methods)
+```
+cookies = {
+  "_trajectory_session": "xxxxxx",
+  "hss-global": "xxxxxx",
+  ...
+}
+```
+
+5. Set up a cron job to run `jobsearch.py` every week
 ```console
 # Open crontab config file
 $ crontab -e
 ```
 Add the following line to your config file
 ```
-0 23 * * 0 /path/to/venv/bin/python /path/to/jobsearch.py
+5 0 * * * /path/to/venv/bin/python /path/to/jobsearch.py
 ```
-This script runs every Sunday (=0, fifth number) at 23:00 (first & second number); change the day and time as you like
+This script runs every day at 0:05 (first & second number); change the day and time as you like
