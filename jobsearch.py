@@ -1,11 +1,10 @@
-import requests
 from bs4 import BeautifulSoup
 from datetime import date, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import smtplib, ssl
 import os
-import json
+import asyncio, aiohttp
 from dotenv import load_dotenv
 
 # Parameters:
@@ -13,7 +12,7 @@ from dotenv import load_dotenv
 # location = "on_campus" / "off_campus"
 # hiringperiod = "fall_only" / "spring_only" / "summer_only" / "academic_year" / "entire_year"
 
-def collectUMassJobs(workstudy="", location="", hiringperiod=""):
+async def collectUMassJobs(workstudy="", location="", hiringperiod=""):
 
     url = "https://yes.umass.edu/portal/jobsearch?cmd=search"
 
@@ -49,43 +48,66 @@ def collectUMassJobs(workstudy="", location="", hiringperiod=""):
         case _:
             pass
 
-    r = requests.get(url)
-    soup = BeautifulSoup(r.content, "html.parser")
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            soup = BeautifulSoup(await response.text(), "html.parser")
 
-    table = soup.find("table", class_="table")
-    rows = table.find_all("tr")
+            table = soup.find("table", class_="table")
+            rows = table.find_all("tr")
 
-    jobs = []
-    today = date.today()
-    today = datetime(today.year, today.month, today.day)
+            jobs = []
+            today = date.today()
+            today = datetime(today.year, today.month, today.day)
 
-    for row in rows:
-        a = row.find("a")
-        link = a.get("href") if a else ""
-        cells = row.find_all("td")
+            for row in rows:
+                a = row.find("a")
+                link = a.get("href") if a else ""
+                cells = row.find_all("td")
 
-        if len(cells) <= 2:
-            continue
+                if len(cells) <= 2:
+                    continue
 
-        posting_date = datetime.strptime(cells[1].text, "%m/%d/%Y")
-        if (today - posting_date).days < 2:
-            jobs.append({"title": cells[2].text, "link": link})
-    
-    return jobs
-
-# Edit the keywords to your liking; they are case insensitive
+                posting_date = datetime.strptime(cells[1].text, "%m/%d/%Y")
+                if (today - posting_date).days < 2:
+                    jobs.append({"title": cells[2].text, "link": link})
+            
+            return jobs
 
 keywords = ["software", "web", "computer", "app", "data", "tech", "machine", "dev"]
 
+def parseHandshakeData(results):
+    jobs = []
+    for result in results:
+        postingDate = datetime.fromisoformat(result["created_at"]).date()
+        if (datetime.today().date() - postingDate).days > 1:
+            return jobs, True
+
+        jobName = result["job_name"]
+        employerName = result["job"]["employer_name"]
+        jobID = result["job_id"]
+        if any([key in jobName.lower() for key in keywords]):
+            jobs.append({
+                "jobName": jobName,
+                "employerName": employerName,
+                "jobID": jobID
+            })
+    return jobs, False
 
 # Fill out the necessary cookies by visiting Handshake website,
 # then Inspect Element, go to Storage tab, and view cookies.
 # Idk if there are any better methods
 
-def fetchHandshakeData(pagenum, fulltime=False, parttime=False, internship=False):
-    headers = {
-        "Accept": "application/json, text/javascript"
-    }
+async def collectHandshakeJobs(fulltime=False, parttime=False, internship=False):
+    jobType = ""
+    if fulltime:
+        jobType = "&job.job_types[]=9" + jobType + "&employment_type_names[]=Full-Time"
+    if parttime:
+        jobType = "&job.job_types[]=9" + jobType + "&employment_type_names[]=Part-Time"
+    if internship or not jobType:
+        jobType = "&job.job_types[]=3" + jobType
+
+    url = "https://app.joinhandshake.com/stu/postings?category=Posting&ajax=true&including_all_facets_in_searches=true&page={}&per_page=100&sort_direction=desc&sort_column=created_at" + jobType
+
     cookies = {
         "_trajectory_session": "",
         "hss-global": "",
@@ -102,70 +124,45 @@ def fetchHandshakeData(pagenum, fulltime=False, parttime=False, internship=False
         "production_utm_params": "",
     }
 
-    session = requests.Session()
-    session.headers = headers
+    session = aiohttp.ClientSession(headers={ "Accept": "application/json, text/javascript" }, cookies=cookies)
 
-    jobType = ""
-    if fulltime:
-        jobType = "&job.job_types[]=9" + jobType + "&employment_type_names[]=Full-Time"
-    if parttime:
-        jobType = "&job.job_types[]=9" + jobType + "&employment_type_names[]=Part-Time"
-    if internship or not jobType:
-        jobType = "&job.job_types[]=3" + jobType
-
-    r = session.get(f"https://app.joinhandshake.com/stu/postings?category=Posting&ajax=true&including_all_facets_in_searches=true&page={pagenum}&per_page=100&sort_direction=desc&sort_column=created_at{jobType}", cookies=cookies)
-    data = json.loads(r.content)
-    return data["results"]
-
-def parseHandshakeData(results):
-    jobs = []
-    for result in results:
-        postingDate = datetime.fromisoformat(result["created_at"]).date()
-        if (datetime.today().date() - postingDate).days > 1:
-            return jobs, True
-
-        jobName = result["job_name"]
-        employerName = result["job"]["employer_name"]
-        jobID = result["job_id"]
-
-        if any([key in jobName.lower() for key in keywords]):
-            jobs.append({
-                "jobName": jobName,
-                "employerName": employerName,
-                "jobID": jobID
-            })
-    return jobs, False
-
-def collectHandshakeJobs():
     jobs = []
     i = 1
     finished = False
 
     while not finished:
-        data = fetchHandshakeData(i)
-        newJobs, finished = parseHandshakeData(data)
-        jobs.extend(newJobs)
-        i += 1
+        async with session.get(url.format(i)) as response:
+            data = await response.json()
+            results = data["results"]
+            newJobs, finished = parseHandshakeData(results)
+            jobs.extend(newJobs)
+            i += 1
+
+    await session.close()
     return jobs
 
 def createBody(umassJobs, handshakeJobs):
-    body_html = "<html>\n<head></head>\n<body>\n"
-    body_html += "<h2>Today's Job Listings</h2>\n"
+    bodyHtml = ["<html>\n<head></head>\n<body>"]
+    bodyHtml.append("<h2>Today's Job Listings</h2>")
 
     umassDomain = "https://yes.umass.edu"
-    body_html += "<h3>UMass Campus Jobs</h3><ul>\n"
+    bodyHtml.append("<h3>UMass Campus Jobs</h3><ul>")
+    if not umassJobs:
+        bodyHtml.append('<li>None</li>')
     for job in umassJobs:
-        body_html += f'<li><a href="{umassDomain + job["link"]}" target="_blank" rel="noopener noreferrer">{job["title"]}</a></li>\n'
-    body_html += "</ul>"
+        bodyHtml.append(f'<li><a href="{umassDomain + job["link"]}" target="_blank" rel="noopener noreferrer">{job["title"]}</a></li>')
+    bodyHtml.append("</ul>")
 
     handshakeDomain = "https://app.joinhandshake.com/stu/jobs/"
-    body_html += "<h3>Handshake Jobs</h3><ul>\n"
+    bodyHtml.append("<h3>Handshake Jobs</h3><ul>")
+    if not handshakeJobs:
+        bodyHtml.append('<li>None</li>')
     for job in handshakeJobs:
-        body_html += f'<li><a href="{handshakeDomain + str(job["jobID"])}" target="_blank" rel="noopener" noreferrer>{job["jobName"]}</a><br>{job["employerName"]}</li>\n'
-    body_html += "</ul>"
+        bodyHtml.append(f'<li><a href="{handshakeDomain + str(job["jobID"])}" target="_blank" rel="noopener" noreferrer>{job["jobName"]}</a><br>{job["employerName"]}</li>')
+    bodyHtml.append("</ul>")
 
-    body_html += "\n</body>\n</html>"
-    return body_html
+    bodyHtml.append("</body>\n</html>")
+    return "\n".join(bodyHtml)
 
 def sendEmail(senderEmail, appPassword, receiverEmail, bodyHtml=None):
     emailMessage = MIMEMultipart()
@@ -180,9 +177,8 @@ def sendEmail(senderEmail, appPassword, receiverEmail, bodyHtml=None):
         server.login(senderEmail, appPassword)
         server.sendmail(senderEmail, receiverEmail, emailMessage.as_string())
 
-def main():
-    umassJobs = collectUMassJobs(workstudy="not_workstudy")
-    handshakeJobs = collectHandshakeJobs()
+async def main():
+    umassJobs, handshakeJobs = await asyncio.gather(collectUMassJobs(workstudy="not_workstudy"), collectHandshakeJobs())
 
     bodyHtml = createBody(umassJobs, handshakeJobs)
 
@@ -194,4 +190,4 @@ def main():
     sendEmail(senderEmail, appPassword, receiverEmail, bodyHtml)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
